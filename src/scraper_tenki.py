@@ -108,3 +108,6 @@ def _extract_date(soup: BeautifulSoup) -> str:
     if match:
         return f"{match.group(1)}月{match.group(2)}日"
     return ""
+    
+    def get_tenki_data():
+    return fetch_tenki_pollen()
