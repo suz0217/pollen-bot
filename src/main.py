@@ -1,17 +1,49 @@
-# src/main.py
-
 import os
+import json
+from datetime import datetime
 import tweepy
+
 from tweet_generator import generate_tweet
 from data_integrator import integrate_data
 
 
-def post_to_x(text: str) -> None:
-    """
-    Xへ投稿（OAuth1.0a）
-    Secrets名は TWITTER_〜 に合わせている
-    """
+HISTORY_FILE = os.getenv("POLLEN_HISTORY_FILE", "pollen_history.json")
 
+
+# =========================
+# 投稿履歴管理
+# =========================
+
+def load_history():
+    if not os.path.exists(HISTORY_FILE):
+        return {}
+    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_history(history: dict):
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+
+
+def already_posted_today() -> bool:
+    today = datetime.now().strftime("%Y-%m-%d")
+    history = load_history()
+    return history.get("last_posted_date") == today
+
+
+def mark_posted_today():
+    today = datetime.now().strftime("%Y-%m-%d")
+    history = load_history()
+    history["last_posted_date"] = today
+    save_history(history)
+
+
+# =========================
+# X投稿
+# =========================
+
+def post_to_x(text: str) -> None:
     client = tweepy.Client(
         consumer_key=os.environ["TWITTER_API_KEY"],
         consumer_secret=os.environ["TWITTER_API_SECRET"],
@@ -22,18 +54,34 @@ def post_to_x(text: str) -> None:
     client.create_tweet(text=text)
 
 
+# =========================
+# メイン処理
+# =========================
+
 def main():
-    # 統合データ取得
+    # すでに今日投稿していたらスキップ
+    if already_posted_today():
+        print("Already posted today. Skip.")
+        return
+
+    # データ取得
     data = integrate_data()
 
     # ツイート生成
     tweet_text = generate_tweet(data)
 
-    # ログ確認用（Actionsで内容が見える）
     print(tweet_text)
 
-    # 投稿
-    post_to_x(tweet_text)
+    try:
+        post_to_x(tweet_text)
+        mark_posted_today()
+        print("Posted successfully.")
+    except tweepy.errors.Forbidden as e:
+        print("403 Forbidden - Duplicate or permission issue.")
+        print(e)
+    except Exception as e:
+        print("Unexpected error:")
+        print(e)
 
 
 if __name__ == "__main__":
