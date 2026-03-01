@@ -156,3 +156,12 @@ def _trim_to_limit(text: str, max_chars: int = 280) -> str:
             break
 
     return "\n".join(lines)
+    import random
+
+suffix = random.choice([
+    " #東京",
+    " #花粉注意",
+    " #今日の花粉",
+])
+
+tweet += suffix
