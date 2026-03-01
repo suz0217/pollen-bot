@@ -1,76 +1,51 @@
+"""
+tweet_generator.py
+
+統合データ（IntegratedPollenData）から X 投稿文を生成する。
+
+要件:
+- 地名は「東京」だけ（区は出さない）
+- 日付は必ず JST (Asia/Tokyo) で生成（GitHub Actions の UTC でズレないように）
+- 文章はリッチ（スギ/ヒノキ/気象/行動3つ/締めの一言/ハッシュタグ）
+- まとまりごとに改行はしない（= 全体を詰めて見やすく）
+- 「(更新 09:52)」のような更新時刻は出さない
+"""
+
 import random
-from dataclasses import dataclass
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from data_integrator import IntegratedPollenData
 
 
-# =========================
-# 文言テーブル
-# =========================
-
-CLOSING_EXTREME = [
-    "今日は正直、外に出たくない。",
-    "都内の空気、重たい。",
-    "今日は無理せず守りに入ろう。",
-]
-CLOSING_HIGH = [
-    "油断するとやられる日。",
-    "今日は体感キツいかも。",
-    "なるべく花粉を避けていこう。",
-]
-CLOSING_MID = [
-    "午後に悪化しやすいパターン。",
-    "外出するなら短時間で。",
-    "目と鼻を守っていこう。",
-]
-CLOSING_LOW = [
-    "今日は比較的マシ。",
-    "今日はラクな日。",
-    "外出してもそこまで心配ないかも。",
-]
-
-# ざっくりテンプレ（レベル別）
-ACTIONS_5 = [
-    "薬は外出30分前に必ず飲む",
-    "不織布マスク必須（できれば立体型）",
-    "帰宅後すぐ顔洗い＋着替え",
-    "洗濯物は部屋干し",
-]
-ACTIONS_4 = [
-    "薬は外出前に飲んでおく",
-    "マスク必須",
-    "帰宅後は顔を洗う",
-]
-ACTIONS_3 = [
-    "薬を忘れずに",
-    "マスク推奨",
-    "目が痒い人は目薬",
-]
-ACTIONS_2 = [
-    "症状ある人は薬を携帯",
-    "マスク推奨",
-]
-ACTIONS_1 = [
-    "今日は比較的ラクな日",
-]
+# ----------------------------
+# JST固定の日付
+# ----------------------------
+def _today_jst_str() -> str:
+    now = datetime.now(ZoneInfo("Asia/Tokyo"))
+    dow = "月火水木金土日"[now.weekday()]
+    return now.strftime(f"%m月%d日({dow})")
 
 
-# =========================
-# ユーティリティ
-# =========================
-
-def _normalize_level_num(level_num: int) -> int:
-    """1〜5に丸める"""
+# ----------------------------
+# 0-5 を想定（元が文字でも数字に寄せる）
+# ----------------------------
+def _to_int_level(x, default=0) -> int:
     try:
-        n = int(level_num)
+        if x is None:
+            return default
+        if isinstance(x, int):
+            return x
+        s = str(x).strip()
+        # "5/5" みたいな形も許容
+        if "/" in s:
+            s = s.split("/")[0].strip()
+        return int(float(s))
     except Exception:
-        return 3
-    return max(1, min(5, n))
+        return default
 
 
 def _arrow(delta: int) -> str:
-    """前日比の矢印"""
     if delta > 0:
         return "↑"
     if delta < 0:
@@ -78,159 +53,146 @@ def _arrow(delta: int) -> str:
     return "→"
 
 
-def _format_date_jp(date_str: str) -> str:
-    """
-    data.date が 'YYYY-MM-DD' でも 'MM/DD' でも来ても、
-    それっぽく '03月01日(日)' に寄せる。
-    """
-    # まず ISO想定
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-        try:
-            dt = datetime.strptime(date_str, fmt)
-            return dt.strftime("%m月%d日(%a)").replace("Mon", "月").replace("Tue", "火").replace("Wed", "水") \
-                .replace("Thu", "木").replace("Fri", "金").replace("Sat", "土").replace("Sun", "日")
-        except Exception:
-            pass
-
-    # それ以外はそのまま
-    return date_str
-
-
-def _trim_to_limit(text: str, max_chars: int = 280) -> str:
-    """
-    Xの文字数は厳密にはURL等で変動するが、
-    ここは「日本語=2カウント相当」で雑に落とす。
-    """
-    def twitter_length(s: str) -> int:
-        count = 0
-        for ch in s:
-            count += 2 if ord(ch) > 127 else 1
-        return count
-
-    if twitter_length(text) <= max_chars:
-        return text
-
-    # 行単位で削る（下から落とす）
-    lines = text.split("\n")
-    while lines and twitter_length("\n".join(lines)) > max_chars:
-        # 最後の行を落とす
-        lines.pop()
-
-    # 末尾が空行だらけなら整える
-    while lines and lines[-1].strip() == "":
-        lines.pop()
-
-    return "\n".join(lines)
-
-
-# =========================
-# 本体
-# =========================
-
-def _generate_actions(data: IntegratedPollenData) -> list[str]:
-    """
-    花粉の強さ（スギ/ヒノキの大きい方）をベースに
-    行動3つ程度に落とす
-    """
-    sugi = _normalize_level_num(getattr(data, "sugi_level_num", 3))
-    hinoki = _normalize_level_num(getattr(data, "hinoki_level_num", 3))
-    combined = max(sugi, hinoki)
+# ----------------------------
+# 行動（3つだけ出す）
+# ----------------------------
+def _generate_actions(combined: int, wind: str | None) -> list[str]:
+    actions: list[str] = []
 
     if combined >= 5:
-        base = ACTIONS_5
-    elif combined == 4:
-        base = ACTIONS_4
-    elif combined == 3:
-        base = ACTIONS_3
-    elif combined == 2:
-        base = ACTIONS_2
+        actions += [
+            "薬は外出30分前に必ず飲む",
+            "不織布マスク必須（できれば立体型）",
+            "帰宅後すぐ顔洗い＋着替え",
+            "洗濯物は部屋干し",
+        ]
+    elif combined >= 4:
+        actions += [
+            "薬は外出前に飲んでおく",
+            "マスク必須",
+            "帰宅後は顔を洗う",
+            "衣類は玄関で払う",
+        ]
+    elif combined >= 3:
+        actions += [
+            "薬を忘れずに",
+            "マスク推奨",
+            "目薬・ティッシュを携帯",
+        ]
+    elif combined >= 2:
+        actions += [
+            "症状ある人は薬を携帯",
+            "マスク推奨",
+            "外干しは控えめに",
+        ]
     else:
-        base = ACTIONS_1
+        actions += [
+            "今日は比較的ラクな日",
+            "外出時は様子見でOK",
+            "帰宅後のうがいで予防",
+        ]
 
-    actions = base.copy()
-
-    # 風が強い日は一言追加（任意）
-    wind = getattr(data, "wind", "")
-    if isinstance(wind, str) and ("強" in wind or "強い" in wind):
+    # 風が強い日は一言加える（ただし3つに収まるよう調整）
+    if wind and "強" in wind:
         actions.append("風が強いので花粉が舞いやすい")
 
-    # 3つに絞る
+    # 3つに固定
     return actions[:3]
 
 
-def _generate_closing(data: IntegratedPollenData) -> str:
-    sugi = _normalize_level_num(getattr(data, "sugi_level_num", 3))
-    hinoki = _normalize_level_num(getattr(data, "hinoki_level_num", 3))
-    combined = max(sugi, hinoki)
+# ----------------------------
+# 締めの一言（短く、キレ）
+# ----------------------------
+CLOSING_EXTREME = [
+    "今日は正直きつい日。",
+    "無理しないのが正解。",
+    "外出は最小限で。",
+]
+CLOSING_HIGH = [
+    "油断するとやられる日。",
+    "対策した人が勝つ日。",
+]
+CLOSING_MID = [
+    "午後に悪化しやすいパターン。",
+    "早め対策でラクになる。",
+]
+CLOSING_LOW = [
+    "今日は比較的マシ。",
+    "油断しすぎなければOK。",
+]
 
+
+def _generate_closing(combined: int) -> str:
     if combined >= 5:
         return random.choice(CLOSING_EXTREME)
-    if combined == 4:
+    if combined >= 4:
         return random.choice(CLOSING_HIGH)
-    if combined == 3:
+    if combined >= 3:
         return random.choice(CLOSING_MID)
     return random.choice(CLOSING_LOW)
 
 
+# ----------------------------
+# 文字数制限（雑に安全側）
+# 日本語は概算で2カウント扱い
+# ----------------------------
+def _trim_to_limit(text: str, max_chars: int = 280) -> str:
+    def twitter_len(s: str) -> int:
+        cnt = 0
+        for ch in s:
+            cnt += 2 if ord(ch) > 127 else 1
+        return cnt
+
+    if twitter_len(text) <= max_chars:
+        return text
+
+    # 末尾から削る（行単位）
+    parts = text.split(" ")
+    while parts and twitter_len(" ".join(parts)) > max_chars:
+        parts.pop()
+    return " ".join(parts)
+
+
+# ----------------------------
+# メイン生成
+# ----------------------------
 def generate_tweet(data: IntegratedPollenData) -> str:
-    """
-    要件：
-    - 「東京」だけ（区名は出さない）
-    - まとまりごとに改行
-    - 更新時刻は出さない
-    """
+    # JSTの日付を固定採用（data.date は使わない）
+    date_str = _today_jst_str()
 
-    # ヘッダー
-    header = "【花粉症の人へ】"
+    sugi_num = _to_int_level(getattr(data, "sugi_level_num", None), default=_to_int_level(getattr(data, "sugi_level", None), 0))
+    hinoki_num = _to_int_level(getattr(data, "hinoki_level_num", None), default=_to_int_level(getattr(data, "hinoki_level", None), 0))
 
-    # 日付
-    date_str = getattr(data, "date", "")
-    date_jp = _format_date_jp(date_str)
+    sugi_delta = _to_int_level(getattr(data, "sugi_diff", 0), 0)
+    hinoki_delta = _to_int_level(getattr(data, "hinoki_diff", 0), 0)
 
-    # 花粉（表示は 5/5 形式）
-    sugi_level = _normalize_level_num(getattr(data, "sugi_level_num", 3))
-    hinoki_level = _normalize_level_num(getattr(data, "hinoki_level_num", 3))
+    high_temp = getattr(data, "high_temp", None)
+    wind = getattr(data, "wind", None)
+    weather = getattr(data, "weather", None)
 
-    sugi_delta = int(getattr(data, "sugi_delta", 0) or 0)
-    hinoki_delta = int(getattr(data, "hinoki_delta", 0) or 0)
+    combined = max(sugi_num, hinoki_num)
 
-    sugi_line = f"スギ：{sugi_level}/5（前日比{_arrow(sugi_delta)}）"
-    hinoki_line = f"ヒノキ：{hinoki_level}/5（前日比{_arrow(hinoki_delta)}）"
+    header = f"【花粉症の人へ】 {date_str} 東京"
+    sugi_line = f"スギ：{sugi_num}/5（前日比{_arrow(sugi_delta)}）"
+    hinoki_line = f"ヒノキ：{hinoki_num}/5（前日比{_arrow(hinoki_delta)}）"
 
-    # 天気
-    high_temp = getattr(data, "high_temp", "")
-    weather = getattr(data, "weather", "")
-    wind = getattr(data, "wind", "")
+    weather_bits = []
+    if high_temp is not None and str(high_temp).strip() != "":
+        weather_bits.append(f"最高{high_temp}℃")
+    if wind and str(wind).strip() != "":
+        weather_bits.append(str(wind))
+    if weather and str(weather).strip() != "":
+        weather_bits.append(str(weather))
+    weather_line = " / ".join(weather_bits) if weather_bits else ""
 
-    weather_parts = []
-    if high_temp:
-        weather_parts.append(f"最高{high_temp}℃")
-    if wind:
-        weather_parts.append(str(wind))
-    if weather:
-        weather_parts.append(str(weather))
-    weather_line = " / ".join(weather_parts) if weather_parts else ""
+    actions = _generate_actions(combined=combined, wind=str(wind) if wind else None)
+    actions_text = " / ".join([f"・{a}" for a in actions])
 
-    # アクション
-    actions = _generate_actions(data)
-    actions_block = "▼ 今日やること\n" + "\n".join([f"・{a}" for a in actions])
+    closing = _generate_closing(combined)
 
-    # 締め
-    closing = _generate_closing(data)
+    hashtags = "#花粉 #花粉予報"
 
-    # ハッシュタグ
-    footer = "#花粉 #花粉予報"
+    # 改行は使わず、まとまりは「スペース」で区切る（ユーザー要望）
+    tweet = " ".join([x for x in [header, sugi_line, hinoki_line, weather_line, "▼今日やること", actions_text, closing, hashtags] if x])
 
-    # まとまりごとに空行を入れる（要望）
-    tweet = (
-        f"{header}\n\n"
-        f"{date_jp} 東京\n\n"
-        f"{sugi_line}\n"
-        f"{hinoki_line}\n\n"
-        f"{weather_line}\n\n"
-        f"{actions_block}\n\n"
-        f"{closing}\n\n"
-        f"{footer}"
-    )
-
-    return _trim_to_limit(tweet, 280)
+    return _trim_to_limit(tweet)
