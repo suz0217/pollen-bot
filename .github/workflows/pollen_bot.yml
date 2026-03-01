@@ -1,0 +1,54 @@
+name: "🌸 Pollen Forecast Bot"
+
+on:
+  schedule:
+    # 毎朝6:30 JST (21:30 UTC 前日)
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "テスト実行（投稿しない）"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  post-pollen-forecast:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 リポジトリをチェックアウト"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Python セットアップ"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "📦 依存パッケージをインストール"
+        run: |
+          pip install -r requirements.txt
+
+      - name: "📂 前日データを復元"
+        uses: actions/cache@v4
+        with:
+          path: src/pollen_history.json
+          key: pollen-history-${{ github.run_id }}
+          restore-keys: |
+            pollen-history-
+
+      - name: "🌸 花粉予報Bot 実行"
+        working-directory: src
+        env:
+          TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+          TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
+          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_SECRET: ${{ secrets.TWITTER_ACCESS_SECRET }}
+          GOOGLE_POLLEN_API_KEY: ${{ secrets.GOOGLE_POLLEN_API_KEY }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          POLLEN_HISTORY_FILE: pollen_history.json
+        run: |
+          python main.py
