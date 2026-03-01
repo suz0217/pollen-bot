@@ -1,39 +1,41 @@
+# main.py
 import os
+from dotenv import load_dotenv
+
+# ✅ ここが肝：必ず「あなたが編集した tweet_generator.py」を呼ぶ
+from tweet_generator import generate_tweet
+
+# データ統合（プロジェクト側の実装に合わせて import 名は存在する前提）
+from data_integrator import integrate_data
+
+# X投稿
 import tweepy
-from scraper_tenki import get_tenki_data
 
 
-def post_to_x(text: str):
+def post_to_x(text: str) -> None:
+    """Xへ投稿（OAuth 2.0 / User context）"""
     client = tweepy.Client(
-        consumer_key=os.environ["TWITTER_API_KEY"],
-        consumer_secret=os.environ["TWITTER_API_SECRET"],
-        access_token=os.environ["TWITTER_ACCESS_TOKEN"],
-        access_token_secret=os.environ["TWITTER_ACCESS_SECRET"],
+        consumer_key=os.environ["X_CONSUMER_KEY"],
+        consumer_secret=os.environ["X_CONSUMER_SECRET"],
+        access_token=os.environ["X_ACCESS_TOKEN"],
+        access_token_secret=os.environ["X_ACCESS_TOKEN_SECRET"],
     )
-
     client.create_tweet(text=text)
 
 
-def main():
-    data = get_tenki_data()
+def main() -> None:
+    load_dotenv()
 
-    if not data:
-        print("データ取得失敗")
-        return
+    # 例：東京に固定（区は不要にするなら integrator 側で location を '東京' に）
+    # ここでは integrator が内部で必要な地点を取る想定
+    data = integrate_data()
 
-    tweet_text = (
-        f"🌸 本日の花粉予報（東京都千代田区）\n"
-        f"{data.date}\n"
-        f"花粉レベル：{data.pollen_level}（{data.pollen_level_num}/5）\n"
-        f"#花粉 #花粉予報"
-    )
+    tweet_text = generate_tweet(data)
 
+    # ログ出し（Actions のログで内容確認できる）
     print(tweet_text)
 
-    dry_run = os.getenv("DRY_RUN", "true").lower() == "true"
-
-    if not dry_run:
-        post_to_x(tweet_text)
+    post_to_x(tweet_text)
 
 
 if __name__ == "__main__":
