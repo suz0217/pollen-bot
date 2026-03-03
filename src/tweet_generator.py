@@ -163,8 +163,8 @@ def generate_tweet(data: IntegratedPollenData) -> str:
     sugi_num = _to_int_level(getattr(data, "sugi_level_num", None), default=_to_int_level(getattr(data, "sugi_level", None), 0))
     hinoki_num = _to_int_level(getattr(data, "hinoki_level_num", None), default=_to_int_level(getattr(data, "hinoki_level", None), 0))
 
-    sugi_delta = _to_int_level(getattr(data, "sugi_diff", 0), 0)
-    hinoki_delta = _to_int_level(getattr(data, "hinoki_diff", 0), 0)
+    sugi_diff_raw = getattr(data, "sugi_diff", "→")
+    hinoki_diff_raw = getattr(data, "hinoki_diff", "→")
 
     high_temp = getattr(data, "high_temp", None)
     wind = getattr(data, "wind", None)
@@ -173,8 +173,8 @@ def generate_tweet(data: IntegratedPollenData) -> str:
     combined = max(sugi_num, hinoki_num)
 
     header = f"【花粉症の人へ】 {date_str} 東京"
-    sugi_line = f"スギ：{sugi_num}/5（前日比{_arrow(sugi_delta)}）"
-    hinoki_line = f"ヒノキ：{hinoki_num}/5（前日比{_arrow(hinoki_delta)}）"
+    sugi_line = f"スギ：{sugi_num}/5（前日比{sugi_diff_raw}）"
+    hinoki_line = f"ヒノキ：{hinoki_num}/5（前日比{hinoki_diff_raw}）"
 
     weather_bits = []
     if high_temp is not None and str(high_temp).strip() != "":
