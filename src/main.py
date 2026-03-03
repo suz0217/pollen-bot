@@ -1,6 +1,7 @@
 import os
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import tweepy
 
 from tweet_generator import generate_tweet
@@ -8,6 +9,7 @@ from data_integrator import integrate_data
 
 
 HISTORY_FILE = os.getenv("POLLEN_HISTORY_FILE", "pollen_history.json")
+JST = ZoneInfo("Asia/Tokyo")
 
 
 # =========================
@@ -17,8 +19,11 @@ HISTORY_FILE = os.getenv("POLLEN_HISTORY_FILE", "pollen_history.json")
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return {}
-    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
 
 
 def save_history(history: dict):
@@ -27,13 +32,13 @@ def save_history(history: dict):
 
 
 def already_posted_today() -> bool:
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(JST).strftime("%Y-%m-%d")
     history = load_history()
     return history.get("last_posted_date") == today
 
 
 def mark_posted_today():
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(JST).strftime("%Y-%m-%d")
     history = load_history()
     history["last_posted_date"] = today
     save_history(history)
