@@ -31,15 +31,24 @@ def save_history(history: dict):
         json.dump(history, f, ensure_ascii=False, indent=2)
 
 
-def already_posted_today() -> bool:
+def already_posted(slot: str = "default") -> bool:
+    """スロット（時間帯）ごとに重複チェック"""
     today = datetime.now(JST).strftime("%Y-%m-%d")
     history = load_history()
-    return history.get("last_posted_date") == today
+    posted = history.get("posted_slots", {})
+    return posted.get(slot) == today
 
 
-def mark_posted_today():
+def mark_posted(slot: str = "default"):
+    """スロット（時間帯）ごとに投稿済みマーク"""
     today = datetime.now(JST).strftime("%Y-%m-%d")
     history = load_history()
+    if "posted_slots" not in history:
+        history["posted_slots"] = {}
+    # 日付が変わったらリセット
+    if history.get("last_posted_date") != today:
+        history["posted_slots"] = {}
+    history["posted_slots"][slot] = today
     history["last_posted_date"] = today
     save_history(history)
 
@@ -64,22 +73,32 @@ def post_to_x(text: str) -> None:
 # =========================
 
 def main():
-    # すでに今日投稿していたらスキップ
-    if already_posted_today():
-        print("Already posted today. Skip.")
+    # 環境変数からフォーマットとスロットを取得
+    force_format = os.getenv("TWEET_FORMAT", "").strip() or None
+    slot = os.getenv("TWEET_SLOT", "default").strip()
+
+    # すでにこのスロットで投稿していたらスキップ
+    if already_posted(slot):
+        print(f"Already posted for slot '{slot}' today. Skip.")
         return
 
     # データ取得
     data = integrate_data()
 
     # ツイート生成
-    tweet_text = generate_tweet(data)
+    tweet_text = generate_tweet(data, force_format=force_format)
 
+    print(f"[slot={slot}, format={force_format or 'auto'}]")
     print(tweet_text)
+
+    dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+    if dry_run:
+        print("DRY_RUN=true, skipping post.")
+        return
 
     try:
         post_to_x(tweet_text)
-        mark_posted_today()
+        mark_posted(slot)
         print("Posted successfully.")
     except tweepy.errors.Forbidden as e:
         print("403 Forbidden - Duplicate or permission issue.")

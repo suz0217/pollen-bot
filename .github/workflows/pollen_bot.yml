@@ -2,8 +2,12 @@ name: "🌸 Pollen Forecast Bot"
 
 on:
   schedule:
-    # 毎朝6:30 JST (21:30 UTC 前日)
+    # 朝6:30 JST (21:30 UTC 前日) - メイン予報
     - cron: "30 21 * * *"
+    # 昼12:00 JST (03:00 UTC) - 豆知識・比較系
+    - cron: "0 3 * * *"
+    # 夜19:00 JST (10:00 UTC) - 一言・ルーティン系
+    - cron: "0 10 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -14,6 +18,10 @@ on:
         options:
           - "true"
           - "false"
+      tweet_format:
+        description: "投稿フォーマット (standard/oneline/comparison/weekend/mythbust/routine)"
+        required: false
+        default: ""
 
 jobs:
   post-pollen-forecast:
@@ -40,6 +48,25 @@ jobs:
           restore-keys: |
             pollen-history-
 
+      - name: "⏰ 投稿スロットとフォーマットを決定"
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TWEET_SLOT=manual" >> $GITHUB_ENV
+            echo "TWEET_FORMAT=${{ github.event.inputs.tweet_format }}" >> $GITHUB_ENV
+          elif [ "${{ github.event.schedule }}" = "30 21 * * *" ]; then
+            echo "TWEET_SLOT=morning" >> $GITHUB_ENV
+            echo "TWEET_FORMAT=standard" >> $GITHUB_ENV
+          elif [ "${{ github.event.schedule }}" = "0 3 * * *" ]; then
+            echo "TWEET_SLOT=noon" >> $GITHUB_ENV
+            echo "TWEET_FORMAT=mythbust" >> $GITHUB_ENV
+          elif [ "${{ github.event.schedule }}" = "0 10 * * *" ]; then
+            echo "TWEET_SLOT=evening" >> $GITHUB_ENV
+            echo "TWEET_FORMAT=routine" >> $GITHUB_ENV
+          else
+            echo "TWEET_SLOT=default" >> $GITHUB_ENV
+            echo "TWEET_FORMAT=" >> $GITHUB_ENV
+          fi
+
       - name: "🌸 花粉予報Bot 実行"
         working-directory: src
         env:
@@ -50,5 +77,7 @@ jobs:
           GOOGLE_POLLEN_API_KEY: ${{ secrets.GOOGLE_POLLEN_API_KEY }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           POLLEN_HISTORY_FILE: pollen_history.json
+          TWEET_FORMAT: ${{ env.TWEET_FORMAT }}
+          TWEET_SLOT: ${{ env.TWEET_SLOT }}
         run: |
           python main.py

@@ -251,34 +251,45 @@ def _generate_closing(combined: int) -> str:
 
 
 # ────────────────────────────────────────
-# メイン生成
+# 花粉の迷信データベース（mythbust用）
 # ────────────────────────────────────────
-def generate_tweet(data: IntegratedPollenData) -> str:
-    date_str = _today_jst_str()
+MYTHS = [
+    {"myth": "雨の翌日は花粉が少ない", "fact": "逆。雨で地面に落ちた花粉が乾いて再飛散する。翌日のほうが多いことがある。"},
+    {"myth": "マスクをしていれば大丈夫", "fact": "普通のマスクで防げるのは約7割。目・髪・服からも入る。マスクだけでは足りない。"},
+    {"myth": "花粉症は大人になってから発症する", "fact": "2歳で発症した記録がある。年齢は関係ない。蓄積量で決まる。"},
+    {"myth": "室内にいれば安全", "fact": "服や髪に付着した花粉が室内に入る。帰宅後の対策なしでは室内も汚染される。"},
+    {"myth": "花粉症は治らない", "fact": "舌下免疫療法で約8割が改善する。ただし3年以上の継続が必要。"},
+    {"myth": "ヨーグルトで花粉症が治る", "fact": "腸内環境は免疫に影響するが、ヨーグルトだけで治る科学的根拠はない。薬を飲め。"},
+    {"myth": "夜は花粉が飛ばない", "fact": "日中飛んだ花粉が夕方〜夜に地表に降りてくる。帰宅時間帯が実は危険。"},
+    {"myth": "花粉は午前中がピーク", "fact": "午前中に飛散開始、昼に最大、夕方に再ピーク。1日2回のピークがある。"},
+    {"myth": "鼻水が出なければ花粉症じゃない", "fact": "目の痒み・くしゃみ・肌荒れ・頭痛だけの花粉症もある。症状は人それぞれ。"},
+    {"myth": "スギ花粉が終われば楽になる", "fact": "スギの後にヒノキ、その後にイネ科、秋にブタクサ。年間を通じて何かしら飛んでいる。"},
+    {"myth": "花粉症の薬は眠くなるから飲みたくない", "fact": "第二世代の抗ヒスタミン薬はほぼ眠くならない。医者に相談して変えろ。"},
+    {"myth": "空気清浄機があれば部屋は安全", "fact": "空気清浄機は空中の花粉を吸うが、床に落ちた花粉は取れない。併用で掃除しろ。"},
+    {"myth": "布団を外に干しても叩けばOK", "fact": "叩くと花粉が繊維の奥に入り込む。掃除機で吸うか布団乾燥機を使え。"},
+    {"myth": "目をこすれば痒みが治まる", "fact": "こすると結膜が傷つき症状が悪化する。冷やすか目薬を差せ。"},
+    {"myth": "花粉は見えないから量がわからない", "fact": "車のボンネットを見ろ。黄色い粉が積もっていたら相当飛んでいる。"},
+    {"myth": "少量の花粉なら問題ない", "fact": "花粉症はコップ理論。少量でも蓄積する。症状が出る前から対策しろ。"},
+    {"myth": "引っ越せば花粉症が治る", "fact": "北海道でもシラカバ花粉がある。沖縄以外、日本中どこでも花粉は飛んでいる。"},
+]
 
+
+# ────────────────────────────────────────
+# データ抽出ヘルパー
+# ────────────────────────────────────────
+def _extract_data(data: IntegratedPollenData) -> dict:
     sugi_num = _to_int_level(getattr(data, "sugi_level_num", None),
                              default=_to_int_level(getattr(data, "sugi_level", None), 0))
     hinoki_num = _to_int_level(getattr(data, "hinoki_level_num", None),
                                default=_to_int_level(getattr(data, "hinoki_level", None), 0))
-    sugi_label = getattr(data, "sugi_level", "")
-    hinoki_label = getattr(data, "hinoki_level", "")
-
     sugi_arrow = _diff_arrow(getattr(data, "sugi_diff", "→"))
     hinoki_arrow = _diff_arrow(getattr(data, "hinoki_diff", "→"))
-
     high_temp = getattr(data, "high_temp", None)
     wind = getattr(data, "wind", None)
     weather = getattr(data, "weather", None)
-
     combined = max(sugi_num, hinoki_num)
-
-    # ── 冒頭フック ──
-    hook = _generate_hook(combined)
-
-    # ── データ行 ──
+    date_str = _today_jst_str()
     data_line = f"{date_str} 東京　スギ {sugi_num}/5{sugi_arrow}　ヒノキ {hinoki_num}/5{hinoki_arrow}"
-
-    # ── 天気まとめ ──
     weather_bits = []
     if high_temp and str(high_temp).strip():
         weather_bits.append(f"最高{high_temp}℃")
@@ -287,33 +298,53 @@ def generate_tweet(data: IntegratedPollenData) -> str:
     if weather and str(weather).strip() and weather != "不明":
         weather_bits.append(str(weather))
     weather_summary = "　".join(weather_bits) if weather_bits else ""
+    return {
+        "sugi_num": sugi_num, "hinoki_num": hinoki_num,
+        "sugi_arrow": sugi_arrow, "hinoki_arrow": hinoki_arrow,
+        "high_temp": high_temp, "wind": wind, "weather": weather,
+        "combined": combined, "date_str": date_str,
+        "data_line": data_line, "weather_summary": weather_summary,
+    }
 
+
+# ────────────────────────────────────────
+# フォーマット選択
+# ────────────────────────────────────────
+def _choose_format(combined: int) -> str:
+    now = datetime.now(JST)
+    is_weekend = now.weekday() >= 5  # 土日
+
+    if combined >= 5:
+        return "oneline"
+    if is_weekend:
+        return "weekend"
+    return random.choice(["standard", "comparison", "mythbust", "routine"])
+
+
+# ────────────────────────────────────────
+# フォーマット: standard（既存）
+# ────────────────────────────────────────
+def _generate_standard(d: dict) -> str:
+    combined = d["combined"]
+    hook = _generate_hook(combined)
     insight = _weather_insight(
-        weather=str(weather) if weather else None,
-        high_temp=str(high_temp) if high_temp else None,
-        wind=str(wind) if wind else None,
+        weather=str(d["weather"]) if d["weather"] else None,
+        high_temp=str(d["high_temp"]) if d["high_temp"] else None,
+        wind=str(d["wind"]) if d["wind"] else None,
     )
-
-    # ── 行動 ──
     actions = _generate_actions(
         combined=combined,
-        wind=str(wind) if wind else None,
-        weather=str(weather) if weather else None,
+        wind=str(d["wind"]) if d["wind"] else None,
+        weather=str(d["weather"]) if d["weather"] else None,
     )
-
-    # ── 締め＋ハッシュタグ ──
     closing = _generate_closing(combined)
     hashtags = "#花粉 #花粉症 #花粉予報"
-
-    # ── 組み立て（文字数を計算しながら行動を詰め込む）──
-    lines = [hook, data_line]
-    if weather_summary:
-        lines.append(weather_summary)
+    lines = [hook, d["data_line"]]
+    if d["weather_summary"]:
+        lines.append(d["weather_summary"])
     lines += ["", insight, "▼やること"]
-
     skeleton = "\n".join(lines) + "\n\n" + closing + "\n" + hashtags
     budget = 278 - _twitter_len(skeleton)
-
     action_lines = []
     for action in actions:
         line = f"・{action}"
@@ -321,10 +352,193 @@ def generate_tweet(data: IntegratedPollenData) -> str:
         if budget >= cost:
             action_lines.append(line)
             budget -= cost
-
     body = "\n".join(lines)
     if action_lines:
         body += "\n" + "\n".join(action_lines)
     body += "\n\n" + closing + "\n" + hashtags
+    return body
+
+
+# ────────────────────────────────────────
+# フォーマット: oneline（一言警報型）
+# ────────────────────────────────────────
+ONELINE_TEMPLATES = [
+    "今日の東京、スギ{sugi}/5。\n一言だけ言う。外に出るな。\n#花粉 #花粉症",
+    "スギ{sugi}/5　ヒノキ{hinoki}/5。\n今日は戦場。完全装備で出ろ。\n#花粉 #花粉予報",
+    "{date} 東京。\nスギ{sugi}/5。過去最悪級。\n薬・マスク・眼鏡。以上。\n#花粉 #花粉症",
+    "今日の数字を見ろ。スギ{sugi}/5。\n対策なしで外出したら後悔する。\n#花粉 #花粉症 #花粉予報",
+]
+
+def _generate_oneline(d: dict) -> str:
+    template = random.choice(ONELINE_TEMPLATES)
+    return template.format(
+        sugi=d["sugi_num"], hinoki=d["hinoki_num"], date=d["date_str"]
+    )
+
+
+# ────────────────────────────────────────
+# フォーマット: comparison（昨日比較型）
+# ────────────────────────────────────────
+COMPARISON_WORSE = [
+    "昨日よりひどい。覚悟しろ。",
+    "昨日マシだったからって油断するな。今日は違う。",
+    "数字が上がった。対策を一段強化しろ。",
+]
+COMPARISON_BETTER = [
+    "昨日より少しマシ。でも油断するな。",
+    "数字は下がった。でも習慣を崩すな。",
+    "少し楽な日。だが続けることが大事。",
+]
+COMPARISON_SAME = [
+    "昨日と同じ。つまり対策も同じでいい。",
+    "横ばい。変えなくていい。今日もやれ。",
+]
+
+def _generate_comparison(d: dict) -> str:
+    combined = d["combined"]
+    arrow = d["sugi_arrow"]
+    if arrow in ("↑", "↗"):
+        trend_comment = random.choice(COMPARISON_WORSE)
+    elif arrow in ("↓", "↘"):
+        trend_comment = random.choice(COMPARISON_BETTER)
+    else:
+        trend_comment = random.choice(COMPARISON_SAME)
+    closing = _generate_closing(combined)
+    lines = [
+        trend_comment,
+        "",
+        d["data_line"],
+    ]
+    if d["weather_summary"]:
+        lines.append(d["weather_summary"])
+    lines += ["", closing, "#花粉 #花粉症 #花粉予報"]
+    return "\n".join(lines)
+
+
+# ────────────────────────────────────────
+# フォーマット: weekend（週末対策型）
+# ────────────────────────────────────────
+WEEKEND_HIGH = [
+    "週末だからって窓を開けて掃除するな。花粉が入る。",
+    "外でBBQ？帰宅後に即シャワーしろ。服は玄関で脱げ。",
+    "買い物は午前中に。午後は花粉のピーク。",
+]
+WEEKEND_LOW = [
+    "今日は掃除日和。窓を開けて換気しろ。",
+    "布団を干すなら今日がチャンス。取り込む前に掃除機をかけろ。",
+    "数字が低い日に薬・マスクを買い足しておけ。",
+]
+
+def _generate_weekend(d: dict) -> str:
+    combined = d["combined"]
+    now = datetime.now(JST)
+    day_name = "土曜" if now.weekday() == 5 else "日曜"
+    if combined >= 3:
+        advice = random.choice(WEEKEND_HIGH)
+    else:
+        advice = random.choice(WEEKEND_LOW)
+    closing = _generate_closing(combined)
+    lines = [
+        f"{day_name}の花粉情報。",
+        d["data_line"],
+    ]
+    if d["weather_summary"]:
+        lines.append(d["weather_summary"])
+    lines += ["", advice, "", closing, "#花粉 #花粉症 #花粉予報"]
+    return "\n".join(lines)
+
+
+# ────────────────────────────────────────
+# フォーマット: mythbust（花粉の真実型）
+# ────────────────────────────────────────
+def _generate_mythbust(d: dict) -> str:
+    myth_item = random.choice(MYTHS)
+    lines = [
+        f"「{myth_item['myth']}」",
+        "",
+        f"→ {myth_item['fact']}",
+        "",
+        d["data_line"],
+        "#花粉 #花粉症 #花粉予報",
+    ]
+    body = "\n".join(lines)
+    if _twitter_len(body) > 278:
+        # 長すぎる場合はデータ行を省略
+        lines = [
+            f"「{myth_item['myth']}」",
+            f"→ {myth_item['fact']}",
+            "#花粉 #花粉症",
+        ]
+        body = "\n".join(lines)
+    return body
+
+
+# ────────────────────────────────────────
+# フォーマット: routine（朝ルーティン型）
+# ────────────────────────────────────────
+ROUTINE_STEPS_HIGH = [
+    "薬を飲む（外出60分前）",
+    "鼻にワセリンを塗る",
+    "マスク＋花粉用眼鏡で出る",
+    "玄関に粘着ローラーを置く",
+    "帰宅したら即洗顔＋うがい",
+]
+ROUTINE_STEPS_MID = [
+    "薬を飲む",
+    "マスクをつける",
+    "帰宅後に洗顔する",
+    "洗濯物を部屋干しにする",
+    "窓を開けない",
+]
+ROUTINE_STEPS_LOW = [
+    "薬のストックを確認",
+    "帰宅後にうがい＋洗顔",
+    "布団を干すなら今日",
+]
+
+def _generate_routine(d: dict) -> str:
+    combined = d["combined"]
+    if combined >= 4:
+        pool = ROUTINE_STEPS_HIGH
+    elif combined >= 2:
+        pool = ROUTINE_STEPS_MID
+    else:
+        pool = ROUTINE_STEPS_LOW
+    random.shuffle(pool)
+    steps = pool[:3]
+    lines = [
+        "今朝やること3つ。",
+        d["data_line"],
+        "",
+    ]
+    for i, step in enumerate(steps, 1):
+        lines.append(f"{i}. {step}")
+    closing = _generate_closing(combined)
+    lines += ["", closing, "#花粉 #花粉症 #花粉予報"]
+    return "\n".join(lines)
+
+
+# ────────────────────────────────────────
+# メイン生成
+# ────────────────────────────────────────
+def generate_tweet(data: IntegratedPollenData, force_format: Optional[str] = None) -> str:
+    d = _extract_data(data)
+    fmt = force_format or _choose_format(d["combined"])
+
+    generators = {
+        "standard": _generate_standard,
+        "oneline": _generate_oneline,
+        "comparison": _generate_comparison,
+        "weekend": _generate_weekend,
+        "mythbust": _generate_mythbust,
+        "routine": _generate_routine,
+    }
+
+    generator = generators.get(fmt, _generate_standard)
+    body = generator(d)
+
+    # 安全弁: 280文字を超えた場合はstandardにフォールバック
+    if _twitter_len(body) > 280 and fmt != "standard":
+        body = _generate_standard(d)
 
     return body
