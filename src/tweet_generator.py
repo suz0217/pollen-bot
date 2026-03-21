@@ -496,18 +496,52 @@ ROUTINE_STEPS_LOW = [
     "布団を干すなら今日",
 ]
 
+ROUTINE_EVENING_HIGH = [
+    "帰宅したら即シャワー",
+    "服は玄関で脱いで払え",
+    "洗顔＋鼻うがいで花粉を落とせ",
+    "明日の薬を枕元に置いておけ",
+    "寝室に空気清浄機を回せ",
+]
+ROUTINE_EVENING_MID = [
+    "帰宅後すぐに洗顔＋うがい",
+    "部屋着に着替えて花粉を持ち込むな",
+    "明日のマスクと薬を準備しておけ",
+    "寝る前に目薬を差しておけ",
+]
+ROUTINE_EVENING_LOW = [
+    "帰宅後のうがいだけは続けろ",
+    "明日の天気を確認しておけ",
+    "薬のストックを確認",
+]
+
+
 def _generate_routine(d: dict) -> str:
     combined = d["combined"]
-    if combined >= 4:
-        pool = ROUTINE_STEPS_HIGH
-    elif combined >= 2:
-        pool = ROUTINE_STEPS_MID
+    now = datetime.now(JST)
+    is_evening = now.hour >= 15
+
+    if is_evening:
+        if combined >= 4:
+            pool = list(ROUTINE_EVENING_HIGH)
+        elif combined >= 2:
+            pool = list(ROUTINE_EVENING_MID)
+        else:
+            pool = list(ROUTINE_EVENING_LOW)
+        header = "今夜やること3つ。"
     else:
-        pool = ROUTINE_STEPS_LOW
+        if combined >= 4:
+            pool = list(ROUTINE_STEPS_HIGH)
+        elif combined >= 2:
+            pool = list(ROUTINE_STEPS_MID)
+        else:
+            pool = list(ROUTINE_STEPS_LOW)
+        header = "今朝やること3つ。"
+
     random.shuffle(pool)
     steps = pool[:3]
     lines = [
-        "今朝やること3つ。",
+        header,
         d["data_line"],
         "",
     ]
