@@ -1,10 +1,8 @@
 """
 data_integrator.py
 
-複数データソース（tenki.jp + Google Pollen API）を統合し、
-前日比の計算と履歴管理を行う。
-
-これが花粉Botのデータパイプラインの心臓部。
+tenki.jp + 環境省WBGTを統合し、
+天気・熱中症リスク・紫外線レベルと前日比を算出する。
 """
 
 import os
@@ -14,28 +12,30 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from scraper_tenki import get_tenki_data
-from api_google_pollen import fetch_google_pollen
+from api_google_pollen import fetch_heatstroke_data
 
 
 @dataclass
-class IntegratedPollenData:
+class IntegratedWeatherData:
     date: str
     day_of_week: str
 
-    sugi_level: str
-    sugi_level_num: int
-    sugi_diff: str          # "↑↑", "↑", "→", "↓", "↓↓"
+    heatstroke_level: str
+    heatstroke_level_num: int   # 1-5
+    heatstroke_diff: str        # "↑↑", "↑", "→", "↓", "↓↓"
+    wbgt_max: float             # WBGT値（環境省）
 
-    hinoki_level: str
-    hinoki_level_num: int
-    hinoki_diff: str
+    uv_level: str
+    uv_level_num: int           # 1-5
+    uv_diff: str
 
     high_temp: str
+    low_temp: str
     wind: str
     weather: str
+    rain_chance: str
 
 
-# ── 前日比の記号 ──
 def _diff_arrow(today: int, yesterday: int) -> str:
     diff = today - yesterday
     if diff >= 2:
@@ -50,8 +50,7 @@ def _diff_arrow(today: int, yesterday: int) -> str:
         return "↓↓"
 
 
-# ── 履歴ファイル管理 ──
-HISTORY_FILE = os.getenv("POLLEN_HISTORY_FILE", "pollen_history.json")
+HISTORY_FILE = os.getenv("POLLEN_HISTORY_FILE", "weather_history.json")
 
 
 def _load_history() -> dict:
@@ -72,153 +71,97 @@ def _save_history(history: dict):
         print(f"[WARN] Failed to save history: {e}")
 
 
-def _get_yesterday_levels(history: dict) -> tuple[int, int]:
-    """前日の花粉レベルを取得（なければ0）"""
-    return (
-        history.get("yesterday_sugi", 0),
-        history.get("yesterday_hinoki", 0),
-    )
-
-
-def _update_history(history: dict, sugi_num: int, hinoki_num: int):
-    """今日のデータを履歴に保存（明日の前日比計算用）"""
-    history["yesterday_sugi"] = sugi_num
-    history["yesterday_hinoki"] = hinoki_num
-    now = datetime.now(ZoneInfo("Asia/Tokyo"))
-    history["last_update"] = now.strftime("%Y-%m-%d %H:%M")
-    _save_history(history)
-
-
-# ── Google Pollen API のインデックス(0-5) → tenki.jp 互換レベル(1-5) ──
-GOOGLE_INDEX_TO_TENKI = {
-    0: (0, "飛散なし"),
-    1: (1, "少ない"),
-    2: (2, "やや多い"),
-    3: (3, "多い"),
-    4: (4, "非常に多い"),
-    5: (5, "極めて多い"),
-}
-
-
-def integrate_data() -> IntegratedPollenData:
+def integrate_data() -> IntegratedWeatherData:
     """
-    全データソースを統合してツイート用データを生成する。
+    全データソースを統合して投稿用データを生成する。
 
-    データ取得優先度:
-    1. tenki.jp スクレイピング（メインソース）
-    2. Google Pollen API（スギ/ヒノキ個別データの補完）
-
-    tenki.jp が取得できなければ Google Pollen API のみで動作。
-    両方失敗した場合はフォールバック値を使用。
+    1. tenki.jp: 天気・気温・紫外線・熱中症
+    2. 環境省WBGT: 暑さ指数（補完）
     """
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
     date_str = now.strftime("%m月%d日")
     day_of_week = "月火水木金土日"[now.weekday()]
 
-    # ── Step 1: tenki.jp からデータ取得 ──
     tenki = get_tenki_data()
+    wbgt_data = fetch_heatstroke_data()
 
-    # ── Step 2: Google Pollen API からデータ取得 ──
-    google = fetch_google_pollen()
+    # 熱中症レベル（tenki.jpベース、環境省WBGTで補完）
+    hs_num = 0
+    hs_label = "不明"
+    wbgt_max = 0.0
 
-    # ── Step 3: データ統合 ──
-    # スギのレベル決定
-    sugi_num = 0
-    sugi_label = "不明"
+    if tenki and tenki.heatstroke_level_num > 0:
+        hs_num = tenki.heatstroke_level_num
+        hs_label = tenki.heatstroke_level
+        print(f"[INFO] Heatstroke from tenki.jp: {hs_label} ({hs_num}/5)")
 
-    if google and google.cedar_index > 0:
-        # Google API にスギ個別データがある場合
-        sugi_num = google.cedar_index
-        _, sugi_label = GOOGLE_INDEX_TO_TENKI.get(sugi_num, (0, "不明"))
-        print(f"[INFO] Sugi from Google API: {sugi_label} ({sugi_num})")
-    if tenki and tenki.pollen_level_num > 0:
-        # tenki.jp のデータ（スギ/ヒノキ合算）
-        # Google API のスギ個別がない場合、または tenki.jp のほうが高い場合に採用
-        if sugi_num == 0 or tenki.pollen_level_num > sugi_num:
-            sugi_num = tenki.pollen_level_num
-            sugi_label = tenki.pollen_level
-            print(f"[INFO] Sugi from tenki.jp: {sugi_label} ({sugi_num})")
+    if wbgt_data:
+        wbgt_max = wbgt_data.wbgt_max
+        if wbgt_data.risk_level_num > hs_num:
+            hs_num = wbgt_data.risk_level_num
+            hs_label = wbgt_data.risk_level
+            print(f"[INFO] Heatstroke upgraded by WBGT: {hs_label} ({hs_num}/5)")
 
-    # ヒノキのレベル決定
-    hinoki_num = 0
-    hinoki_label = "不明"
+    # 紫外線
+    uv_num = 0
+    uv_label = "不明"
+    if tenki and tenki.uv_level_num > 0:
+        uv_num = tenki.uv_level_num
+        uv_label = tenki.uv_level
+        print(f"[INFO] UV from tenki.jp: {uv_label} ({uv_num}/5)")
 
-    if google and google.cypress_index > 0:
-        hinoki_num = google.cypress_index
-        _, hinoki_label = GOOGLE_INDEX_TO_TENKI.get(hinoki_num, (0, "不明"))
-        print(f"[INFO] Hinoki from Google API: {hinoki_label} ({hinoki_num})")
-    else:
-        # Google API なし → tenki.jp のレベルを少し下げてヒノキとする
-        # （3月はスギ主体、ヒノキは3月下旬〜4月がピーク）
-        if tenki and tenki.pollen_level_num > 0:
-            # スギの1段下をヒノキの目安とする（3月上旬〜中旬の場合）
-            if now.month == 3 and now.day <= 20:
-                hinoki_num = max(1, tenki.pollen_level_num - 2)
-            elif now.month >= 4 or (now.month == 3 and now.day > 20):
-                # 3月下旬〜4月はヒノキもピーク
-                hinoki_num = max(1, tenki.pollen_level_num - 1)
-            else:
-                hinoki_num = max(1, tenki.pollen_level_num - 2)
+    # 天気
+    high_temp = tenki.high_temp if tenki else ""
+    low_temp = tenki.low_temp if tenki else ""
+    wind = tenki.wind if tenki else ""
+    weather = tenki.weather_summary if tenki else "不明"
+    rain_chance = tenki.rain_chance if tenki else ""
 
-            _, hinoki_label = GOOGLE_INDEX_TO_TENKI.get(hinoki_num, (0, "不明"))
-            print(f"[INFO] Hinoki estimated from tenki.jp: {hinoki_label} ({hinoki_num})")
-
-    # ── Step 4: 前日比計算 ──
+    # 前日比
     history = _load_history()
-    yest_sugi, yest_hinoki = _get_yesterday_levels(history)
-    sugi_diff = _diff_arrow(sugi_num, yest_sugi)
-    hinoki_diff = _diff_arrow(hinoki_num, yest_hinoki)
+    yest_hs = history.get("yesterday_heatstroke", 0)
+    yest_uv = history.get("yesterday_uv", 0)
 
-    # 初回（前日データなし）は「→」にする
-    if yest_sugi == 0 and yest_hinoki == 0:
-        sugi_diff = "→"
-        hinoki_diff = "→"
-        print("[INFO] No yesterday data. Using → for diff.")
+    if yest_hs == 0 and yest_uv == 0:
+        hs_diff = "→"
+        uv_diff = "→"
+    else:
+        hs_diff = _diff_arrow(hs_num, yest_hs)
+        uv_diff = _diff_arrow(uv_num, yest_uv)
 
     # 今日のデータを履歴に保存
-    _update_history(history, sugi_num, hinoki_num)
+    history["yesterday_heatstroke"] = hs_num
+    history["yesterday_uv"] = uv_num
+    history["last_update"] = now.strftime("%Y-%m-%d %H:%M")
+    _save_history(history)
 
-    # ── Step 5: 天気情報 ──
-    high_temp = ""
-    wind = ""
-    weather = ""
+    # フォールバック
+    if hs_num == 0:
+        hs_num = 1
+        hs_label = "ほぼ安全"
 
-    if tenki:
-        high_temp = tenki.high_temp or ""
-        wind = tenki.wind or ""
-        weather = tenki.weather_summary or ""
+    if uv_num == 0:
+        uv_num = 1
+        uv_label = "弱い"
 
-    # ── Step 6: フォールバック ──
-    if sugi_num == 0:
-        sugi_num = 1
-        sugi_label = "少ない"
-        print("[WARN] All sources failed for sugi. Using fallback: 少ない")
-
-    if hinoki_num == 0:
-        hinoki_num = 1
-        hinoki_label = "少ない"
-        print("[WARN] All sources failed for hinoki. Using fallback: 少ない")
-
-    if not weather:
-        weather = "不明"
-        print("[WARN] Weather data unavailable.")
-
-    # ── 完成 ──
-    result = IntegratedPollenData(
+    result = IntegratedWeatherData(
         date=date_str,
         day_of_week=day_of_week,
-        sugi_level=sugi_label,
-        sugi_level_num=sugi_num,
-        sugi_diff=sugi_diff,
-        hinoki_level=hinoki_label,
-        hinoki_level_num=hinoki_num,
-        hinoki_diff=hinoki_diff,
+        heatstroke_level=hs_label,
+        heatstroke_level_num=hs_num,
+        heatstroke_diff=hs_diff,
+        wbgt_max=wbgt_max,
+        uv_level=uv_label,
+        uv_level_num=uv_num,
+        uv_diff=uv_diff,
         high_temp=high_temp,
+        low_temp=low_temp,
         wind=wind,
         weather=weather,
+        rain_chance=rain_chance,
     )
 
-    print(f"[INFO] Final: スギ={sugi_label}({sugi_num}) ヒノキ={hinoki_label}({hinoki_num}) "
+    print(f"[INFO] Final: 熱中症={hs_label}({hs_num}) UV={uv_label}({uv_num}) "
           f"天気={weather} 気温={high_temp}℃")
 
     return result
@@ -229,6 +172,7 @@ if __name__ == "__main__":
     data = integrate_data()
     print(f"\n--- 統合結果 ---")
     print(f"日付: {data.date}({data.day_of_week})")
-    print(f"スギ: {data.sugi_level} ({data.sugi_level_num}/5) 前日比{data.sugi_diff}")
-    print(f"ヒノキ: {data.hinoki_level} ({data.hinoki_level_num}/5) 前日比{data.hinoki_diff}")
+    print(f"熱中症: {data.heatstroke_level} ({data.heatstroke_level_num}/5) 前日比{data.heatstroke_diff}")
+    print(f"WBGT: {data.wbgt_max}℃")
+    print(f"紫外線: {data.uv_level} ({data.uv_level_num}/5) 前日比{data.uv_diff}")
     print(f"天気: {data.weather} / {data.high_temp}℃ / {data.wind}")

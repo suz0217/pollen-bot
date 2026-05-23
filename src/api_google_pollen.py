@@ -1,143 +1,112 @@
 """
-api_google_pollen.py
+api_heatstroke.py (旧 api_google_pollen.py)
 
-Google Pollen API からスギ・ヒノキの個別花粉データを取得する。
-無料枠: 月5,000コール（1日1回なら余裕）
+環境省 熱中症予防情報サイト (wbgt.env.go.jp) から
+WBGT（暑さ指数）を取得する。
 
-APIキーが設定されていない場合はスキップして None を返す。
-tenki.jp のみでも動作する設計。
+データソース: 環境省の暑さ指数予測値（CSV）
+対象地点: 東京（地点コード: 44132）
 """
 
-import os
 import requests
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
+JST = ZoneInfo("Asia/Tokyo")
+
+WBGT_CSV_URL = "https://www.wbgt.env.go.jp/prev15WG/dl/yohou_all.csv"
+
+TOKYO_POINT_CODE = "44132"
 
 
 @dataclass
-class GooglePollenData:
-    """Google Pollen API から取得したデータ"""
+class HeatstrokeData:
+    """環境省WBGTデータ"""
     date: str
-    tree_index: int           # 0-5
-    tree_category: str
-    cedar_index: int          # スギ (Japanese Cedar) 0-5
-    cedar_category: str
-    cypress_index: int        # ヒノキ (Cypress) 0-5
-    cypress_category: str
-    health_recommendations: list = field(default_factory=list)
+    wbgt_max: float
+    risk_level: str       # 「ほぼ安全」「注意」「警戒」「厳重警戒」「危険」
+    risk_level_num: int   # 1-5
 
 
-# Google API カテゴリ → 日本語マッピング
-CATEGORY_JP = {
-    "None": "飛散なし",
-    "Very Low": "ごく少ない",
-    "Low": "少ない",
-    "Moderate": "やや多い",
-    "High": "多い",
-    "Very High": "非常に多い",
-}
+WBGT_LEVELS = [
+    (31, 5, "危険"),
+    (28, 4, "厳重警戒"),
+    (25, 3, "警戒"),
+    (21, 2, "注意"),
+    (0,  1, "ほぼ安全"),
+]
 
 
-def _extract_pollen_type(daily_info: dict, type_code: str) -> dict:
-    """花粉タイプ（TREE/GRASS/WEED）情報を抽出"""
-    for ptype in daily_info.get("pollenTypeInfo", []):
-        if ptype.get("code") == type_code:
-            index_info = ptype.get("indexInfo", {})
-            return {
-                "index": index_info.get("value", 0),
-                "category": CATEGORY_JP.get(index_info.get("category", ""), "不明"),
-            }
-    return {}
+def _wbgt_to_risk(wbgt: float) -> tuple[int, str]:
+    for threshold, num, label in WBGT_LEVELS:
+        if wbgt >= threshold:
+            return num, label
+    return 1, "ほぼ安全"
 
 
-def _extract_plant_species(daily_info: dict, species_code: str) -> dict:
-    """個別植物種情報を抽出"""
-    for ptype in daily_info.get("pollenTypeInfo", []):
-        for plant in ptype.get("plantInfo", []):
-            if plant.get("code") == species_code:
-                index_info = plant.get("indexInfo", {})
-                return {
-                    "index": index_info.get("value", 0),
-                    "category": CATEGORY_JP.get(index_info.get("category", ""), "不明"),
-                }
-    return {}
-
-
-def fetch_google_pollen(
-    lat: float = 35.6762,
-    lng: float = 139.6503,
-    days: int = 2,
-    api_key: Optional[str] = None,
-) -> Optional[GooglePollenData]:
+def fetch_heatstroke_data() -> Optional[HeatstrokeData]:
     """
-    Google Pollen API から花粉データを取得
-
-    API Doc: https://developers.google.com/maps/documentation/pollen/overview
-    無料枠: 月5,000コール
+    環境省WBGTデータを取得。
+    CSVが取得できない場合（冬季など）はNoneを返す。
     """
-    api_key = api_key or os.environ.get("GOOGLE_POLLEN_API_KEY", "")
-
-    if not api_key:
-        print("[INFO] GOOGLE_POLLEN_API_KEY not set. Skipping Google Pollen API.")
-        return None
-
-    url = "https://pollen.googleapis.com/v1/forecast:lookup"
-    params = {
-        "key": api_key,
-        "location.latitude": lat,
-        "location.longitude": lng,
-        "days": days,
-        "languageCode": "ja",
-    }
+    print("[INFO] Fetching WBGT data from wbgt.env.go.jp...")
 
     try:
-        resp = requests.get(url, params=params, timeout=15)
+        resp = requests.get(WBGT_CSV_URL, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
+        resp.encoding = "shift_jis"
+        lines = resp.text.strip().split("\n")
 
-        if "dailyInfo" not in data or not data["dailyInfo"]:
-            print("[WARN] No daily info in Google Pollen API response")
+        today_str = datetime.now(JST).strftime("%Y%m%d")
+
+        max_wbgt = None
+        for line in lines:
+            cols = line.split(",")
+            if len(cols) < 5:
+                continue
+            if cols[0].strip() == TOKYO_POINT_CODE and today_str in cols[1].strip():
+                try:
+                    wbgt_vals = [float(c) for c in cols[3:] if c.strip() and c.strip() != ""]
+                    if wbgt_vals:
+                        line_max = max(wbgt_vals)
+                        if max_wbgt is None or line_max > max_wbgt:
+                            max_wbgt = line_max
+                except (ValueError, IndexError):
+                    continue
+
+        if max_wbgt is None:
+            print("[WARN] No WBGT data found for Tokyo today (may be off-season)")
             return None
 
-        today = data["dailyInfo"][0]
-        date_info = today.get("date", {})
-        date_str = f"{date_info.get('month', '?')}月{date_info.get('day', '?')}日"
+        risk_num, risk_label = _wbgt_to_risk(max_wbgt)
+        now = datetime.now(JST)
+        date_str = f"{now.month}月{now.day}日"
 
-        tree_data = _extract_pollen_type(today, "TREE")
-        cedar_data = _extract_plant_species(today, "JAPANESE_CEDAR")
-        cypress_data = _extract_plant_species(today, "JAPANESE_CYPRESS")
-
-        recommendations = []
-        for ptype in today.get("pollenTypeInfo", []):
-            recs = ptype.get("healthRecommendations", [])
-            recommendations.extend(recs)
-
-        return GooglePollenData(
+        print(f"[INFO] WBGT: {max_wbgt}℃ → {risk_label} ({risk_num}/5)")
+        return HeatstrokeData(
             date=date_str,
-            tree_index=tree_data.get("index", 0),
-            tree_category=tree_data.get("category", "不明"),
-            cedar_index=cedar_data.get("index", 0),
-            cedar_category=cedar_data.get("category", "不明"),
-            cypress_index=cypress_data.get("index", 0),
-            cypress_category=cypress_data.get("category", "不明"),
-            health_recommendations=recommendations,
+            wbgt_max=max_wbgt,
+            risk_level=risk_label,
+            risk_level_num=risk_num,
         )
 
     except requests.exceptions.HTTPError as e:
-        print(f"[ERROR] Google Pollen API HTTP error: {e}")
+        print(f"[ERROR] WBGT HTTP error: {e}")
         return None
     except Exception as e:
-        print(f"[ERROR] Google Pollen API failed: {e}")
+        print(f"[ERROR] WBGT fetch failed: {e}")
         return None
 
 
 if __name__ == "__main__":
-    print("=== Google Pollen API テスト ===")
-    result = fetch_google_pollen()
+    print("=== 環境省 WBGT テスト ===")
+    result = fetch_heatstroke_data()
     if result:
         print(f"日付: {result.date}")
-        print(f"樹木全体: {result.tree_category} (index: {result.tree_index})")
-        print(f"スギ: {result.cedar_category} (index: {result.cedar_index})")
-        print(f"ヒノキ: {result.cypress_category} (index: {result.cypress_index})")
+        print(f"WBGT最大: {result.wbgt_max}℃")
+        print(f"リスク: {result.risk_level} ({result.risk_level_num}/5)")
     else:
-        print("取得失敗（APIキー未設定の場合は正常）")
+        print("取得失敗（オフシーズンの場合は正常）")

@@ -8,13 +8,9 @@ from tweet_generator import generate_tweet
 from data_integrator import integrate_data
 
 
-HISTORY_FILE = os.getenv("POLLEN_HISTORY_FILE", "pollen_history.json")
+HISTORY_FILE = os.getenv("POLLEN_HISTORY_FILE", "weather_history.json")
 JST = ZoneInfo("Asia/Tokyo")
 
-
-# =========================
-# 投稿履歴管理
-# =========================
 
 def load_history():
     if not os.path.exists(HISTORY_FILE):
@@ -32,7 +28,6 @@ def save_history(history: dict):
 
 
 def already_posted(slot: str = "default") -> bool:
-    """スロット（時間帯）ごとに重複チェック"""
     today = datetime.now(JST).strftime("%Y-%m-%d")
     history = load_history()
     posted = history.get("posted_slots", {})
@@ -40,22 +35,16 @@ def already_posted(slot: str = "default") -> bool:
 
 
 def mark_posted(slot: str = "default"):
-    """スロット（時間帯）ごとに投稿済みマーク"""
     today = datetime.now(JST).strftime("%Y-%m-%d")
     history = load_history()
     if "posted_slots" not in history:
         history["posted_slots"] = {}
-    # 日付が変わったらリセット
     if history.get("last_posted_date") != today:
         history["posted_slots"] = {}
     history["posted_slots"][slot] = today
     history["last_posted_date"] = today
     save_history(history)
 
-
-# =========================
-# X投稿
-# =========================
 
 def post_to_x(text: str) -> None:
     client = tweepy.Client(
@@ -64,28 +53,18 @@ def post_to_x(text: str) -> None:
         access_token=os.environ["TWITTER_ACCESS_TOKEN"],
         access_token_secret=os.environ["TWITTER_ACCESS_SECRET"],
     )
-
     client.create_tweet(text=text)
 
 
-# =========================
-# メイン処理
-# =========================
-
 def main():
-    # 環境変数からフォーマットとスロットを取得
     force_format = os.getenv("TWEET_FORMAT", "").strip() or None
     slot = os.getenv("TWEET_SLOT", "default").strip()
 
-    # すでにこのスロットで投稿していたらスキップ
     if already_posted(slot):
         print(f"Already posted for slot '{slot}' today. Skip.")
         return
 
-    # データ取得
     data = integrate_data()
-
-    # ツイート生成
     tweet_text = generate_tweet(data, force_format=force_format)
 
     print(f"[slot={slot}, format={force_format or 'auto'}]")

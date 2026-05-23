@@ -1,12 +1,12 @@
-name: "🌸 Pollen Forecast Bot"
+name: "☀️ 天気・熱中症・紫外線予報Bot"
 
 on:
   schedule:
     # 朝6:30 JST (21:30 UTC 前日) - メイン予報
     - cron: "30 21 * * *"
-    # 昼12:00 JST (03:00 UTC) - 豆知識・比較系
+    # 昼12:00 JST (03:00 UTC) - 豆知識・誤解破壊系
     - cron: "0 3 * * *"
-    # 夜19:00 JST (10:00 UTC) - 一言・ルーティン系
+    # 夜19:00 JST (10:00 UTC) - 夜ルーティン系
     - cron: "0 10 * * *"
   workflow_dispatch:
     inputs:
@@ -19,12 +19,12 @@ on:
           - "true"
           - "false"
       tweet_format:
-        description: "投稿フォーマット (standard/oneline/comparison/weekend/mythbust/routine)"
+        description: "投稿フォーマット (standard/alert/uv_focus/comparison/weekend/mythbust/routine)"
         required: false
         default: ""
 
 jobs:
-  post-pollen-forecast:
+  post-weather-forecast:
     runs-on: ubuntu-latest
 
     steps:
@@ -43,10 +43,10 @@ jobs:
       - name: "📂 前日データを復元"
         uses: actions/cache@v4
         with:
-          path: src/pollen_history.json
-          key: pollen-history-${{ github.run_id }}
+          path: src/weather_history.json
+          key: weather-history-${{ github.run_id }}
           restore-keys: |
-            pollen-history-
+            weather-history-
 
       - name: "⏰ 投稿スロットとフォーマットを決定"
         run: |
@@ -67,16 +67,15 @@ jobs:
             echo "TWEET_FORMAT=" >> $GITHUB_ENV
           fi
 
-      - name: "🌸 花粉予報Bot 実行"
+      - name: "☀️ 天気・熱中症・紫外線Bot 実行"
         working-directory: src
         env:
           TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
           TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
           TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
           TWITTER_ACCESS_SECRET: ${{ secrets.TWITTER_ACCESS_SECRET }}
-          GOOGLE_POLLEN_API_KEY: ${{ secrets.GOOGLE_POLLEN_API_KEY }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-          POLLEN_HISTORY_FILE: pollen_history.json
+          POLLEN_HISTORY_FILE: weather_history.json
           TWEET_FORMAT: ${{ env.TWEET_FORMAT }}
           TWEET_SLOT: ${{ env.TWEET_SLOT }}
         run: |
